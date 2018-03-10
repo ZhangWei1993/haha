@@ -41,7 +41,6 @@ class DuelingDQN:
             sess=None,
     ):
         self.actions = action_size
-        self.laser = 50
         self.state = state
         self.epsilon = epsilon
         self.lr = learning_rate
@@ -73,14 +72,11 @@ class DuelingDQN:
         self.cost_his = []
 
     def _build_net(self):
-        def dqn_layers(s,laser,net_param):
+        def dqn_layers(s,net_param):
             #choose the network type as cnn
             if self.cnn:
                 s = tf.reshape(s,[-1,48,64,1])
-                # add the input of laser data
-#                laser = tf.shape(laser,[-1,50])
                 self.input_image = s
-#                self.input_laser = laser
 #                tf.image.summary('input1',tf.reshape(s[:,:,:,0],[-1,32,32,1]))
                 with tf.variable_scope('conv1'):
                     conv1=tf.contrib.layers.conv2d(
@@ -159,16 +155,40 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-                feature1 = tf.reshape(conv4, [-1, 6 * 4*32])
-                feature = tf.contrib.layers.fully_connected(
-                        inputs = feature1,
-                        num_outputs = 50,
-                        activation_fn=tf.nn.relu,
-                        variables_collections=net_param,
-#                        outputs_collections=net_param,
-                        trainable=True,
-                        scope=None
-                    )
+#                with tf.variable_scope('pool3'):
+#                    pool3=tf.contrib.layers.max_pool2d(
+#                        inputs = conv3,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+##                        outputs_collections=net_param,
+#                        scope=None
+#                    )
+#                with tf.variable_scope('conv4'):
+#                    conv4=tf.contrib.layers.conv2d(
+#                        inputs = pool3,
+#                        num_outputs = 32,
+#                        kernel_size = [3, 3],
+#                        stride=1,
+#                        padding='VALID',
+#                        data_format=None,
+#                        rate=1,
+#                        activation_fn=tf.nn.relu,
+#                        variables_collections=net_param,
+##                        outputs_collections=net_param,
+#                        trainable=True,
+#                        scope=None
+#                    )
+#                with tf.variable_scope('pool4'):
+#                    pool4=tf.contrib.layers.max_pool2d(
+#                        inputs = conv4,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+##                        outputs_collections=net_param,
+#                        scope=None
+#                    )
+                feature = tf.reshape(conv4, [-1, 6 * 4*32])
                 fully_connected_hidden = 200#the number of each 
             #choose the network type as fully-connected layers
 
@@ -213,22 +233,9 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-                with tf.variable_scope('laser_regulation'):
-                    self.Regulation = tf.contrib.layers.fully_connected(
-                        inputs = feature,
-                        num_outputs = self.laser,
-                        activation_fn=None,
-                        variables_collections=net_param,
-#                        outputs_collections=net_param,
-                        trainable=True,
-                        scope=None
-                    )
-                    regulation_max = tf.reduce_max(self.Regulation, axis=1, keep_dims=True)
-                    reulation_normal = tf.div(self.Regulation,regulation_max)
-                    self.Regulation = reulation_normal
+
                 with tf.variable_scope('Q'):
                     out = self.Val + (self.Adv - tf.reduce_mean(self.Adv, axis=1, keep_dims=True))     # Q = V(s) + A(s,a)
-                    regulation = self.Regulation
             else:
                 with tf.variable_scope('dqn'):
                     fc2 = tf.contrib.layers.fully_connected(
@@ -249,29 +256,29 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-            return out, regulation
+            return out
 
         # ------------------ build evaluate_net ------------------
         self.s = tf.placeholder(tf.float32, [None, 48,64,1], name='s')
         self.temp = tf.placeholder(shape=None,dtype=tf.float32, name='temp')# input
-        self.laser = tf.placeholder(tf.float32,[None,50],name = 'laser')
+#        self.laser = tf.placeholder(tf.float32,[None,4 * 4*16],name = 'laser')
         self.q_target = tf.placeholder(tf.float32, [None, self.actions], name='Q_target')  # for calculating loss
         with tf.variable_scope('eval_net'):
-            self.q_eval, self.regulation_1 = dqn_layers(self.s,['eval_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
+            self.q_eval = dqn_layers(self.s,['eval_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
             self.q_dist = tf.nn.softmax(self.q_eval/self.temp)
 
         with tf.variable_scope('loss'):
-            self.loss = tf.reduce_mean(tf.squared_difference(self.q_target, self.q_eval)) + 0.01*tf.reduce_mean(tf.squared_difference(self.laser, self.regulation_1))
+            self.loss = tf.reduce_mean(tf.squared_difference(self.q_target, self.q_eval))
         with tf.variable_scope('train'):
             self._train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
 
         # ------------------ build target_net ------------------
         self.s_ = tf.placeholder(tf.float32, [None, 48,64,1], name='s_')    # input
         with tf.variable_scope('target_net'):
-            self.q_next, self.regulation_next = dqn_layers(self.s_, ['target_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
+            self.q_next = dqn_layers(self.s_, ['target_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
 
-    def remember(self, state, action, reward, next_state,laser_state, done):
-        self.memory.append((state, action, reward, next_state,laser_state,done))
+    def remember(self, state, action, reward, next_state,done):
+        self.memory.append((state, action, reward, next_state,done))
         if len(self.memory) > self.memory_size:
             self.memory.popleft()     
     def plot_image(self,state,kind):
@@ -329,7 +336,7 @@ class DuelingDQN:
             self.sess.run(self.replace_target_op)
             print('\ntarget_params_replaced\n')
         minibatch = random.sample(self.memory, self.batch_size)
-        for state, action, reward, next_state, laser_state, done in minibatch:
+        for state, action, reward, next_state, done in minibatch:
             q_next = self.sess.run(self.q_next, feed_dict={self.s_: next_state}) # next observation
             q_eval = self.sess.run(self.q_eval, {self.s: state})   
             q_target = q_eval.copy()

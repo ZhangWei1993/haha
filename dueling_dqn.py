@@ -60,11 +60,10 @@ if __name__ == "__main__":
 #    dueling_DQN.memory,ep = load_memory(episode=2000)#reload memory
 #    dueling_DQN.epsilon = 0.28
     for e in range(start, EPISODES):
-        state,laser_state, done = env.reset()
-        next_state, next_laser_state, reward, done, _ = env.step(random.randrange(3))
-        next_state, next_laser_state, reward, done, _ = env.step(random.randrange(3))
+        state,done = env.reset()
+        next_state, reward, done, _ = env.step(random.randrange(3))
+        next_state, reward, done, _ = env.step(random.randrange(3))
         state = next_state
-        laser_state = np.reshape(next_laser_state,(1,50))
         state = np.reshape(state,(1,48,64,1))
 #        state = np.stack((state,state),axis=3)        
         total_reward = 0
@@ -72,16 +71,14 @@ if __name__ == "__main__":
             # env.render()
             action = dueling_DQN.act(state,"boltzmann")
 #            dueling_DQN.plot_image(state,kind = 'sucessive')
-            next_state, next_laser_state, reward, done, _ = env.step(action)            
+            next_state, reward, done, _ = env.step(action)            
 #            next_state = tf.image.per_image_standardization(next_state)
             next_state = np.reshape(next_state,(1,48,64,1))
-            next_laser_state = np.reshape(next_laser_state,(1,50))
 #            next_state = np.append(next_state,state[:,:,:,:1],axis=3)
 #            reward = reward if not done else -10
 #            next_state = np.reshape(next_state, [1, state_size])
-            dueling_DQN.remember(state, action, reward, next_state,laser_state,done)
+            dueling_DQN.remember(state, action, reward, next_state,done)
             state = next_state
-            laser_state = next_laser_state
             total_reward = reward + total_reward
 #            print(action)
 #            if time == 1499:

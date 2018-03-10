@@ -53,21 +53,7 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             if (min_range > data.ranges[i] > 0.0):
                 done = True
         return done
-    def discretize_laserscan(self,data,new_ranges):
-        discretized_ranges = []
-        mod = len(data.ranges)/new_ranges
-        for i, item in enumerate(data.ranges):
-            if (i%mod==0):
-                if np.isnan(data.ranges[i]):
-                    discretized_ranges.append(0.0)
-                else:
-                    discretized_ranges.append(data.ranges[i])
-            if (min_range > data.ranges[i] > 0.0):
-                done = True
-        #remap the laser data value to (0,1)
-        discretized_max = np.max(discretized_ranges) 
-        discretized_ranges = np.divide(discretized_ranges,discretized_max)
-        return discretized_ranges
+
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
@@ -102,7 +88,6 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             except:
                 pass
         done = self.obstacle_observation(data)
-        laser_state = self.discretize_laserscan(data,50)
         cv_image = None
         cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
         cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
@@ -135,7 +120,7 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         state = cv_image/255.0
 #        cv_image = cv_image/255.0
 #        state = cv_image.reshape(cv_image.shape[0], cv_image.shape[1])
-        return state, laser_state, reward, done, {}
+        return state, reward, done, {}
 
     def _reset(self):
 
@@ -161,7 +146,6 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             except:
                 pass
         done = self.obstacle_observation(data)
-        laser_state = self.discretize_laserscan(data,50)
         cv_image = None
         cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
         cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
@@ -188,4 +172,4 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         #cv_image = skimage.exposure.rescale_intensity(cv_image,out_range=(0,255))
 
         state = cv_image
-        return state, laser_state, done
+        return state, done
