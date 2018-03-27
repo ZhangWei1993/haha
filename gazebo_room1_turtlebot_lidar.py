@@ -18,6 +18,8 @@ from sensor_msgs.msg import LaserScan
 from gym.utils import seeding
 from cv_bridge import CvBridge, CvBridgeError
 from distutils.version import LooseVersion
+from matplotlib import pyplot as plt
+
 
 import skimage as skimage
 from skimage import transform, color, exposure
@@ -34,13 +36,11 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         self.unpause = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
         self.pause = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.reset_proxy = rospy.ServiceProxy('/gazebo/reset_simulation', Empty)
-        self.linear_size = 2
-        self.angular_size = 5
-        self.action_space = spaces.Discrete(self.linear_size*self.angular_size) #F,L,R
+        self.action_space = spaces.Discrete(3) #F,L,R
         self.reward_range = (-np.inf, np.inf)
-        self.img_rows = 64
+        self.img_rows = 48
         self.img_cols = 64
-        self.img_channels = 1
+        self.img_channels = 4
 
         self._seed()
 
@@ -66,12 +66,21 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         except Exception as e:
             print "/gazebo/unpause_physics service call failed"
             traceback.print_exc()
-        vel_cmd = Twist()
-        vel_cmd.linear.x = (int(action/self.angular_size)+1)*0.2
-        vel_cmd.angular.z = (action%self.angular_size-2)*3.1415/12
-        while time.time() < 0.2 + time_1:
+        if action == 0:
+            vel_cmd = Twist()
+            vel_cmd.linear.x = 0.4
+            vel_cmd.angular.z = 0.0
+        if action == 1:
+            vel_cmd = Twist()
+            vel_cmd.linear.x = 0.2
+            vel_cmd.angular.z = 0.2
+        if action == 2:
+            vel_cmd = Twist()
+            vel_cmd.linear.x = 0.2
+            vel_cmd.angular.z = -0.2
+        while time.time() < 0.07 + time_1:
             self.vel_pub.publish(vel_cmd)
-
+        self.vel_pub.publish(vel_cmd)
         data = None
         while data is None:
             try:
@@ -79,11 +88,13 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             except:
                 pass
         done = self.obstacle_observation(data)
-        image_data = None
         cv_image = None
-        image_data = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
-        cv_image = CvBridge().imgmsg_to_cv2(image_data, "bgr8")             
-
+        cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
+        cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
+        cv_image = cv2.cvtColor(cv_image,cv2.COLOR_BGR2GRAY)
+#        height, width = cv_image.shape 
+#        print ("height : {}, width : {}" .format(height, width))       
+        cv_image = cv2.resize(cv_image, (self.img_cols, self.img_rows))
         rospy.wait_for_service('/gazebo/pause_physics', timeout=10)
         try:
             #resp_pause = pause.call()
@@ -96,13 +107,19 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
 
 
         if not done:
-            reward =  vel_cmd.linear.x * np.cos(vel_cmd.angular.z*4)*0.2
+            if action ==0:
+                reward = 0.02
+            else:
+                reward = 0.01
         else:
             reward = -10
-        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        cv_image = cv2.resize(cv_image, (self.img_rows, self.img_cols))
-        cv_image = cv_image/255.0
-        state = cv_image.reshape(cv_image.shape[0], cv_image.shape[1])
+#        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+#        cv2.normalize(cv_image,cv_image,0.0,1.0,cv2.NORM_MINMAX)
+#        cv2.imshow('cv_image',cv_image)
+#        cv_image = cv2.resize(cv_image, (self.img_rows, self.img_cols))
+        state = cv_image/255.0
+#        cv_image = cv_image/255.0
+#        state = cv_image.reshape(cv_image.shape[0], cv_image.shape[1])
         return state, reward, done, {}
 
     def _reset(self):
@@ -129,11 +146,13 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             except:
                 pass
         done = self.obstacle_observation(data)
-        image_data = None
         cv_image = None
-        image_data = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=5)
-        cv_image = CvBridge().imgmsg_to_cv2(image_data, "bgr8")
-        rospy.wait_for_service('/gazebo/pause_physics')
+        cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
+        cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
+        cv_image = cv2.cvtColor(cv_image,cv2.COLOR_BGR2GRAY)
+#        cv2.namedWindow("window", 1)
+#        cv2.imshow("window", cv_image)
+        rospy.wait_for_service('/gazebo/pause_physics', timeout=10)
         try:
             #resp_pause = pause.call()
             self.pause()
@@ -145,11 +164,12 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))'''
 
 
-        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        cv_image = cv2.resize(cv_image, (self.img_rows, self.img_cols))
+#        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+        cv_image = cv2.resize(cv_image, (self.img_cols, self.img_rows))
         cv_image = cv_image/255.0
+#        cv2.imshow('cv_image',cv_image)
         #cv_image = cv_image[(self.img_rows/20):self.img_rows-(self.img_rows/20),(self.img_cols/10):self.img_cols] #crop image
         #cv_image = skimage.exposure.rescale_intensity(cv_image,out_range=(0,255))
 
-        state = cv_image.reshape(cv_image.shape[0], cv_image.shape[1])
+        state = cv_image
         return state, done

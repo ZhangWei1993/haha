@@ -12,6 +12,10 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import random
+import matplotlib as mp
+import matplotlib.pyplot as plt
+import math
+import matplotlib.gridspec as gridspec
 
 #np.random.seed(1)
 #tf.set_random_seed(1)
@@ -23,10 +27,10 @@ class DuelingDQN:
             action_size,
             state,
             epsilon,
-            learning_rate=0.0001,
+            learning_rate=0.00001,
             reward_decay=0.95,
             e_greedy=0.01,
-            replace_target_iter=100,
+            replace_target_iter=500,
             memory_size=500,
             batch_size=32,
             e_greedy_decay=None,
@@ -71,13 +75,15 @@ class DuelingDQN:
         def dqn_layers(s,net_param):
             #choose the network type as cnn
             if self.cnn:
-                s = tf.reshape(s,[-1,self.state,1,1])
+                s = tf.reshape(s,[-1,48,64,2])
+                self.input_image = s
+#                tf.image.summary('input1',tf.reshape(s[:,:,:,0],[-1,32,32,1]))
                 with tf.variable_scope('conv1'):
                     conv1=tf.contrib.layers.conv2d(
                         inputs = s,
-                        num_outputs = 4,
-                        kernel_size = [3, 1],
-                        stride=1,
+                        num_outputs = 16,
+                        kernel_size = [3, 3],
+                        stride=2,
                         padding='SAME',
                         data_format=None,
                         rate=1,
@@ -86,20 +92,21 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-                with tf.variable_scope('pool1'):
-                    pool1=tf.contrib.layers.max_pool2d(
-                        inputs = conv1,
-                        kernel_size = [2,1],
-                        stride=[2,1],
-                        padding='VALID',
-                        scope=None
-                    )
+                    self.conv1 = conv1
+#                with tf.variable_scope('pool1'):
+#                    pool1=tf.contrib.layers.max_pool2d(
+#                        inputs = conv1,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+#                        scope=None
+#                    )
                 with tf.variable_scope('conv2'):
                     conv2=tf.contrib.layers.conv2d(
-                        inputs = pool1,
-                        num_outputs = 4,
-                        kernel_size = [3, 1],
-                        stride=1,
+                        inputs = conv1,
+                        num_outputs = 16,
+                        kernel_size = [3, 3],
+                        stride=2,
                         padding='SAME',
                         data_format=None,
                         rate=1,
@@ -108,21 +115,22 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-                with tf.variable_scope('pool2'):
-                    pool2=tf.contrib.layers.max_pool2d(
-                        inputs = conv2,
-                        kernel_size = [2,1],
-                        stride=[2,1],
-                        padding='VALID',
-#                        outputs_collections=net_param,
-                        scope=None
-                    )
+                    self.conv2 = conv2
+#                with tf.variable_scope('pool2'):
+#                    pool2=tf.contrib.layers.max_pool2d(
+#                        inputs = conv2,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+##                        outputs_collections=net_param,
+#                        scope=None
+#                    )
                 with tf.variable_scope('conv3'):
                     conv3=tf.contrib.layers.conv2d(
-                        inputs = pool2,
-                        num_outputs = 4,
-                        kernel_size = [3, 1],
-                        stride=1,
+                        inputs = conv2,
+                        num_outputs = 32,
+                        kernel_size = [3, 3],
+                        stride=2,
                         padding='SAME',
                         data_format=None,
                         rate=1,
@@ -132,41 +140,57 @@ class DuelingDQN:
                         trainable=True,
                         scope=None
                     )
-                with tf.variable_scope('pool3'):
-                    pool3=tf.contrib.layers.max_pool2d(
+                with tf.variable_scope('conv4'):
+                    conv4=tf.contrib.layers.conv2d(
                         inputs = conv3,
-                        kernel_size = [2,1],
-                        stride=[2,1],
+                        num_outputs = 32,
+                        kernel_size = [3, 3],
+                        stride=1,
                         padding='VALID',
+                        data_format=None,
+                        rate=1,
+                        activation_fn=tf.nn.relu,
+                        variables_collections=net_param,
 #                        outputs_collections=net_param,
+                        trainable=True,
                         scope=None
                     )
-                feature = tf.reshape(pool3, [-1, 25 * 4])
-                fully_connected_hidden = 50#the number of each 
+#                with tf.variable_scope('pool3'):
+#                    pool3=tf.contrib.layers.max_pool2d(
+#                        inputs = conv3,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+##                        outputs_collections=net_param,
+#                        scope=None
+#                    )
+#                with tf.variable_scope('conv4'):
+#                    conv4=tf.contrib.layers.conv2d(
+#                        inputs = pool3,
+#                        num_outputs = 32,
+#                        kernel_size = [3, 3],
+#                        stride=1,
+#                        padding='VALID',
+#                        data_format=None,
+#                        rate=1,
+#                        activation_fn=tf.nn.relu,
+#                        variables_collections=net_param,
+##                        outputs_collections=net_param,
+#                        trainable=True,
+#                        scope=None
+#                    )
+#                with tf.variable_scope('pool4'):
+#                    pool4=tf.contrib.layers.max_pool2d(
+#                        inputs = conv4,
+#                        kernel_size = [2,2],
+#                        stride=[2,2],
+#                        padding='VALID',
+##                        outputs_collections=net_param,
+#                        scope=None
+#                    )
+                feature = tf.reshape(conv4, [-1, 6 * 4*32])
+                fully_connected_hidden = 200#the number of each 
             #choose the network type as fully-connected layers
-            if self.fcn:
-                with tf.variable_scope('fc1'):
-                    fc1 = tf.contrib.layers.fully_connected(
-                        inputs = s,
-                        num_outputs = 100,
-                        activation_fn=tf.nn.relu,
-                        variables_collections=net_param,
-#                        outputs_collections=net_param,
-                        trainable=True,
-                        scope=None
-                    )
-                with tf.variable_scope('fc2'):
-                    fc2 = tf.contrib.layers.fully_connected(
-                        inputs = fc1,
-                        num_outputs = 50,
-                        activation_fn=tf.nn.relu,
-                        variables_collections=net_param,
-#                        outputs_collections=net_param,
-                        trainable=True,
-                        scope=None
-                    )
-                feature = fc1
-                fully_connected_hidden = 20
 
             if self.dueling:
                 # Dueling DQN
@@ -235,8 +259,9 @@ class DuelingDQN:
             return out
 
         # ------------------ build evaluate_net ------------------
-        self.s = tf.placeholder(tf.float32, [None, self.state], name='s')
+        self.s = tf.placeholder(tf.float32, [None, 48,64,2], name='s')
         self.temp = tf.placeholder(shape=None,dtype=tf.float32, name='temp')# input
+#        self.laser = tf.placeholder(tf.float32,[None,4 * 4*16],name = 'laser')
         self.q_target = tf.placeholder(tf.float32, [None, self.actions], name='Q_target')  # for calculating loss
         with tf.variable_scope('eval_net'):
             self.q_eval = dqn_layers(self.s,['eval_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
@@ -248,21 +273,59 @@ class DuelingDQN:
             self._train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
 
         # ------------------ build target_net ------------------
-        self.s_ = tf.placeholder(tf.float32, [None, self.state], name='s_')    # input
+        self.s_ = tf.placeholder(tf.float32, [None, 48,64,2], name='s_')    # input
         with tf.variable_scope('target_net'):
             self.q_next = dqn_layers(self.s_, ['target_net_params',tf.GraphKeys.GLOBAL_VARIABLES])
-
 
     def remember(self, state, action, reward, next_state,done):
         self.memory.append((state, action, reward, next_state,done))
         if len(self.memory) > self.memory_size:
-            self.memory.popleft()
+            self.memory.popleft()     
+    def plot_image(self,state,kind):
+        def plotNNFilter(input_image,conv1,conv2,kind):
+            filters = input_image.shape[3]
+            fig = plt.figure(1,(40,40))
+#            gridspec.GridSpec(8,8)
+            n_columns = 2
+            n_rows = 5
+            for i in range(filters):
+                fig.add_subplot(n_rows, n_columns, i+1)
+                plt.title('input_image ' + str(i))
+                plt.imshow(input_image[0,:,:,i], interpolation="nearest", cmap="gray") 
+#            fig.savefig('input_image.png')            
+            filters1 = conv1.shape[3]
+#            fig1 = plt.figure(1, figsize=(20,20))
+            n_columns = 8
+            n_rows = 5
+            for i in range(filters1):
+                fig.add_subplot(n_rows, n_columns, i+9)
+                plt.title('conv1 ' + str(i))
+                plt.imshow(conv1[0,:,:,i], interpolation="nearest", cmap="gray") 
+#            fig1.savefig('conv1.png')
+            filters2 = conv2.shape[3]
+#            fig2 = plt.figure(2, figsize=(20,20))
+            n_columns = 8
+            n_rows = 5
+            for i in range(filters2):
+                fig.add_subplot(n_rows, n_columns, i+25)
+                plt.title('conv2 ' + str(i))
+                plt.imshow(conv2[0,:,:,i], interpolation="nearest", cmap="gray") 
+            fig.savefig('state'+kind+'.png')            
+        input_image,conv1,conv2 = self.sess.run([self.input_image,self.conv1, self.conv2],feed_dict={self.s_: state})
+        plotNNFilter(input_image,conv1,conv2,kind)
+        
+#        conv2_show = self.sess.run(self.conv2, feed_dict={self.s: state})
+#        plotNNFilter(conv2_show)
 
     def act(self, state,exploration):
         if exploration == "e_greedy":
             if np.random.rand() <= self.epsilon:
                 return random.randrange(self.action_size)
-            act_values = self.sess.run(self.q_eval, feed_dict={self.s: state})
+#            act_values = self.sess.run(self.q_eval, feed_dict={self.s: state})
+            act_values, Val, Adv = self.sess.run([self.q_next,self.Val,self.Adv],feed_dict={self.s_: state})
+            Adv = np.max(Adv)-np.mean(Adv)
+            Val = np.mean(Val)
+            print("Value: {}, Advantage: {}" .format(Val,Adv))
             return np.argmax(act_values[0])  # returns action
         if exploration == "boltzmann":
             act_values = self.sess.run(self.q_dist, feed_dict={self.s: state, self.temp: self.epsilon})
