@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import gym
 import rospy
+import roslib
 import roslaunch
 import time
 import numpy as np
@@ -9,24 +10,19 @@ import sys
 import os
 import random
 import traceback 
+import subprocess
 from gym import utils, spaces
 from gym_gazebo.envs import gazebo_env
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Pose
 from std_srvs.srv import Empty
-from sensor_msgs.msg import Image
 from sensor_msgs.msg import LaserScan
 from gym.utils import seeding
-from cv_bridge import CvBridge, CvBridgeError
 from distutils.version import LooseVersion
-from matplotlib import pyplot as plt
-from gazebo_msgs.srv import SpawnModel
-import tf
-
-import skimage as skimage
-from skimage import transform, color, exposure
-from skimage.transform import rotate
-from skimage.viewer import ImageViewer
+from gazebo_msgs.srv import SpawnModel,DeleteModel,GetModelState
+from tf.transformations import euler_from_quaternion
+#import tf
+import rosnode
 
 class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
 
@@ -38,27 +34,35 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         self.unpause = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
         self.pause = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.reset_proxy = rospy.ServiceProxy('/gazebo/reset_simulation', Empty)
+        self.delete_model = rospy.ServiceProxy('/gazebo/delete_model', DeleteModel)
+        self.get_model_pose = rospy.ServiceProxy('/gazebo/get_model_state',GetModelState)
         #randomly spawn the target
         self.add_model = rospy.ServiceProxy('/gazebo/spawn_urdf_model', SpawnModel)
-        self.action_space = spaces.Discrete(3) #F,L,R
+        self.action_space = spaces.Discrete(5) #F,L,R
         self.reward_range = (-np.inf, np.inf)
-        self.img_rows = 48
-        self.img_cols = 64
-        self.img_channels = 4
         #TODO this is the list of positions the target box
-        self.target_position = np.array([[0,0],[1,1],[2,2]])
+#        self.target_position = np.array([[-1.2,1.2],[1.2,1.2],[1.2,-1.2],[-6,3.8],[0.36,4.6],[4.3,1.6],[7.7,4.8],[6.5,1.5],[6.8,-1.4],[-6.3,-1.7]])
+        self.target_position = np.array([[-1.0,1.0],[1.0,1.0],[1.0,-1.0],[-1.0,-1.0],[0,-2.0],[1,-2.0],[-1,-2.0]])
 
         self._seed()
 
-    def obstacle_observation(self,data):
+
+    def discretize_observation(self,data,new_ranges):
+        discretized_ranges = []
         min_range = 0.2
-#        data = np.divide(data, 6.0)
         done = False
-#        print(len(data.ranges))
+        mod = len(data.ranges)/new_ranges
         for i, item in enumerate(data.ranges):
-            if (min_range > data.ranges[i] > 0.0):
+            if (i%mod==0):
+                if data.ranges[i] == float ('Inf'):
+                    discretized_ranges.append(6)
+                elif np.isnan(data.ranges[i]):
+                    discretized_ranges.append(0)
+                else:
+                    discretized_ranges.append(data.ranges[i])
+            if (min_range > data.ranges[i] > 0):
                 done = True
-        return done
+        return discretized_ranges,done
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -84,7 +88,15 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             vel_cmd = Twist()
             vel_cmd.linear.x = 0.2
             vel_cmd.angular.z = -0.2
-        while time.time() < 0.07 + time_1:
+        if action == 3:
+            vel_cmd = Twist()
+            vel_cmd.linear.x = 0.0
+            vel_cmd.angular.z = -0.2
+        if action == 4:
+            vel_cmd = Twist()
+            vel_cmd.linear.x = 0.0
+            vel_cmd.angular.z = -0.2
+        while time.time() < 0.2 + time_1:
             self.vel_pub.publish(vel_cmd)
         self.vel_pub.publish(vel_cmd)
         data = None
@@ -93,14 +105,48 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
                 data = rospy.wait_for_message('/scan', LaserScan, timeout=10)
             except:
                 pass
-        done = self.obstacle_observation(data)
-        cv_image = None
-        cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
-        cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
-        cv_image = cv2.cvtColor(cv_image,cv2.COLOR_BGR2GRAY)
-#        height, width = cv_image.shape 
-#        print ("height : {}, width : {}" .format(height, width))       
-        cv_image = cv2.resize(cv_image, (self.img_cols, self.img_rows))
+        state,done = self.discretize_observation(data,50)
+        #TODO shaped reward
+        #TODO calculate the polar coordinates of the target in camera frame
+        rospy.wait_for_service('/gazebo/get_model_state', timeout=10)        
+        in_pose = self.get_model_pose(model_name="mobile_base",relative_entity_name="world").pose
+        abs_x = self.target_pose.position.x - in_pose.position.x
+        abs_y = self.target_pose.position.y - in_pose.position.y
+        (roll, pitch, yaw) = euler_from_quaternion ([in_pose.orientation.x,in_pose.orientation.y,in_pose.orientation.z,in_pose.orientation.w])
+        trans_matrix = np.matrix([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
+        rela = np.matmul(trans_matrix,np.array([[abs_x],[abs_y]]))
+        rela_x = rela[0,0]
+        rela_y = rela[1,0]
+#        ads_dis = np.sqrt(abs_x**2+abs_y**2)
+        rela_distance = np.sqrt(rela_x** 2 + rela_y ** 2)
+#        print("distance: {}" .format(ads_dis))
+#        rela_distance = np.sqrt(rela_x** 2 + rela_y ** 2)
+        if rela_x >= 0:
+            rela_angle = np.arctan(rela_y / (rela_x+ 0.00000001))
+        else:
+            rela_angle = np.arctan(rela_y / (rela_x- 0.00000001)) + np.pi
+        target = np.append(rela_distance, rela_angle)
+        vel_state = np.append( vel_cmd.linear.x,vel_cmd.angular.z)
+        if not done:
+            if action ==0:
+                reward = -0.1
+            elif action ==1 or action ==2:
+                reward = -0.1
+            else:
+                reward = -0.1
+        else:
+            reward = -10
+        if rela_distance <= 0.4:
+            done = True
+            reward = 10
+            # delete the spwaned model at last time
+#        if done:
+#            rospy.wait_for_service('/gazebo/delete_model', timeout=10)
+#            try:
+#                #reset_proxy.call()
+#                self.delete_model(model_name="target")
+#            except (rospy.ServiceException) as e:
+#                print ("/gazebo/delete_model service call failed")  
         rospy.wait_for_service('/gazebo/pause_physics', timeout=10)
         try:
             #resp_pause = pause.call()
@@ -110,38 +156,7 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
         except Exception as e:
             print ("/gazebo/pause_physics service call failed")
             traceback.print_exc()
-        #TODO shaped reward
-
-
-        if not done:
-            if action ==0:
-                reward = 0.02
-            else:
-                reward = 0.01
-        else:
-            reward = -10
-#        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-#        cv2.normalize(cv_image,cv_image,0.0,1.0,cv2.NORM_MINMAX)
-#        cv2.imshow('cv_image',cv_image)
-#        cv_image = cv2.resize(cv_image, (self.img_rows, self.img_cols))
-        state = cv_image/255.0
-        #TODO calculate the polar coordinates of the target in camera frame
-        listener = tf.TransformListener()
-        try:
-            (trans, rot) = listener.lookupTransform('/target', '/camera', rospy.Time(0))
-        except Exception as e:
-            print("lookupTransform service call failed")
-            traceback.print_exc()
-        rela_distance = np.sqrt(trans[0]**2+trans[1]**2)
-        if trans[0] >=0:
-            rela_angle = np.arctan(trans[1] / trans[0])
-        else:
-            rela_angle = np.arctan(trans[1] / trans[0])+np.pi
-        target = np.append(rela_distance,rela_angle)
-        vel_state = np.append( vel_cmd.linear.x,vel_cmd.angular.z)
-        #        cv_image = cv_image/255.0
-#        state = cv_image.reshape(cv_image.shape[0], cv_image.shape[1])
-        return state, reward, target, vel_state, done, {}
+        return state, reward, target, vel_state, done
 
     def _reset(self):
 
@@ -152,77 +167,103 @@ class GazeboRoom1TurtlebotLidarEnv(gazebo_env.GazeboEnv):
             self.reset_proxy()
         except (rospy.ServiceException) as e:
             print ("/gazebo/reset_simulation service call failed")
-        #randomly spawn the target box
-        rospy.wait_for_service('/gazebo/spawn_urdf_model')
-        #TODO change the address and description of the target box,can directly
-        model_xml = open("/home/lq/gym-gazebo/gym_gazebo/envs/assets/models/wood_cube_10cm/model.sdf","r").read()
-        #TODO change the location of the target box
-        pose = Pose()
-        # the position of the target, using
-        target_no = np.random.choice(self.target_position.shape[0])
-        [pose.position.x,pose.position.y] = self.target_position[target_no] + np.random.uniform(-0.2,0.2)
-        pose.position.z = 0
-        pose.orientation.x = 0
-        pose.orientation.y= 0
-        pose.orientation.z = 0
-        pose.orientation.w = 0
-        self.add_model(model_name="target",
-                        model_xml=model_xml,
-                        robot_namespace="",
-                        initial_pose=pose,
-                        reference_frame="")
-
         # Unpause simulation to make observation
         rospy.wait_for_service('/gazebo/unpause_physics')
         try:
-            #resp_pause = pause.call()
             self.unpause()
         except (rospy.ServiceException) as e:
             print "/gazebo/unpause_physics service call failed"
+        rospy.wait_for_service('/gazebo/delete_model', timeout=10)
+        try:
+            #reset_proxy.call()
+            self.delete_model(model_name="target")
+        except (rospy.ServiceException) as e:
+            print ("/gazebo/delete_model service call failed")  
         data = None
         while data is None:
             try:
                 data = rospy.wait_for_message('/scan', LaserScan, timeout=10)
             except:
                 pass
-        done = self.obstacle_observation(data)
-        cv_image = None
-        cv_image = rospy.wait_for_message('/camera/rgb/image_raw', Image, timeout=10)
-        cv_image = CvBridge().imgmsg_to_cv2(cv_image, "bgr8") 
-        cv_image = cv2.cvtColor(cv_image,cv2.COLOR_BGR2GRAY)
-#        cv2.namedWindow("window", 1)
-#        cv2.imshow("window", cv_image)
+        state,done = self.discretize_observation(data,50)
+        #randomly spawn the target box
+        #TODO change the address and description of the target box,can directly
+        model_xml = "<?xml version=\"1.0\"?> \
+                    <robot name=\"myfirst\"> \
+                      <link name=\"world\"> \
+                      </link>\
+                      <link name=\"cylinder0\">\
+                        <visual>\
+                          <geometry>\
+                            <sphere radius=\"0.3\"/>\
+                          </geometry>\
+                          <origin xyz=\"0 0 0\"/>\
+                          <material name=\"rojotransparente\">\
+                              <ambient>0.5 0.5 1.0 0.1</ambient>\
+                              <diffuse>0.5 0.5 1.0 0.1</diffuse>\
+                          </material>\
+                        </visual>\
+                        <inertial>\
+                          <mass value=\"5.0\"/>\
+                          <inertia ixx=\"1.0\" ixy=\"0.0\" ixz=\"0.0\" iyy=\"1.0\" iyz=\"0.0\" izz=\"1.0\"/>\
+                        </inertial>\
+                      </link>\
+                      <joint name=\"world_to_base\" type=\"fixed\"> \
+                        <origin xyz=\"0 0 0\" rpy=\"0 0 0\"/>\
+                        <parent link=\"world\"/>\
+                        <child link=\"cylinder0\"/>\
+                      </joint>\
+                      <gazebo reference=\"cylinder0\">\
+                        <material>Gazebo/RedTransparent</material>\
+                      </gazebo>\
+                    </robot>"
+        #TODO change the location of the target box
+        pose = Pose()
+        # the position of the target, using
+        target_no = np.random.choice(self.target_position.shape[0])
+        [pose.position.x,pose.position.y] = self.target_position[target_no] + np.random.uniform(-0.4,0.4)
+#        [pose.position.x,pose.position.y] = self.target_position[target_no]
+        pose.position.z = 0.5
+        pose.orientation.x = 0
+        pose.orientation.y= 0
+        pose.orientation.z = 0
+        pose.orientation.w = 0
+        self.target_pose = pose
+        rospy.wait_for_service('/gazebo/spawn_urdf_model', timeout=10)
+        try: 
+            self.add_model(model_name="target",
+                            model_xml=model_xml,
+                            robot_namespace="",
+                            initial_pose=pose,
+                            reference_frame="/map")
+        except (rospy.ServiceException) as e:
+            print ("/gazebo/spawn_urdf_model service call failed")
+        #get the pose of the target with repect to the camera
+        rospy.wait_for_service('/gazebo/get_model_state', timeout=10)
+        in_pose = self.get_model_pose(model_name="mobile_base",relative_entity_name="world").pose
+        abs_x = self.target_pose.position.x - in_pose.position.x
+        abs_y = self.target_pose.position.y - in_pose.position.y
+        (roll, pitch, yaw) = euler_from_quaternion ([in_pose.orientation.x,in_pose.orientation.y,in_pose.orientation.z,in_pose.orientation.w])
+        trans_matrix = np.matrix([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
+        rela = np.matmul(trans_matrix,np.array([[abs_x],[abs_y]]))
+        rela_x = rela[0,0]
+        rela_y = rela[1,0]
+#        ads_dis = np.sqrt(abs_x**2+abs_y**2)
+        rela_distance = np.sqrt(rela_x** 2 + rela_y ** 2)
+        if rela_x >= 0:
+            rela_angle = np.arctan(rela_y / (rela_x+ 0.00000001))
+        else:
+            rela_angle = np.arctan(rela_y / (rela_x- 0.00000001)) + np.pi
+        target = np.append(rela_distance, rela_angle)
+        #print the distance and angle of the target point
+#        print("distance: {}" .format(ads_dis))
         rospy.wait_for_service('/gazebo/pause_physics', timeout=10)
         try:
             #resp_pause = pause.call()
             self.pause()
         except (rospy.ServiceException) as e:
             print "/gazebo/pause_physics service call failed"
-
-        '''x_t = skimage.color.rgb2gray(cv_image)
-        x_t = skimage.transform.resize(x_t,(32,32))
-        x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))'''
-
-
-#        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        cv_image = cv2.resize(cv_image, (self.img_cols, self.img_rows))
-        cv_image = cv_image/255.0
+        
         # TODO calculate the polar coordinates of the target in camera frame
-        listener = tf.TransformListener()
-        try:
-            (trans, rot) = listener.lookupTransform('/target', '/camera', rospy.Time(0))
-        except Exception as e:
-            print("lookupTransform service call failed")
-            traceback.print_exc()
-        rela_distance = np.sqrt(trans[0] ** 2 + trans[1] ** 2)
-        if trans[0] >= 0:
-            rela_angle = np.arctan(trans[1] / trans[0])
-        else:
-            rela_angle = np.arctan(trans[1] / trans[0]) + np.pi
-        target = np.append(rela_distance, rela_angle)
-#        cv2.imshow('cv_image',cv_image)
-        #cv_image = cv_image[(self.img_rows/20):self.img_rows-(self.img_rows/20),(self.img_cols/10):self.img_cols] #crop image
-        #cv_image = skimage.exposure.rescale_intensity(cv_image,out_range=(0,255))
-
-        state = cv_image
+#        subprocess.Popen("rosrun tf view_frames")
         return state, target, done

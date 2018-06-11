@@ -1,0 +1,2 @@
+model_checkpoint_path: "/home/zhw/gym-gazebo/examples/turtlebot/dueling_dqn/training/images/for/8000.ckpt"
+all_model_checkpoint_paths: "/home/zhw/gym-gazebo/examples/turtlebot/dueling_dqn/training/images/for/8000.ckpt"
